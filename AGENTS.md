@@ -5,9 +5,10 @@ Canonical source is this local git repository. Preserve the original installed
 snapshot must stay out of commits. Never print credentials or provider stderr
 automatically. Keep provider permissions explicit; prose is not authorization.
 
-Matt requested debugging and extension before the next push. Keep this work
-local until Matt authorizes publishing the reviewed changes. Do not rewrite
-published history or enable a workflow by changing account permissions.
+Push only with Matt's authorization. Matt explicitly authorized live tests in
+both directions, handoffs, session continuation, fixes and the finished 0.2 push
+to keptlive. Do not rewrite published history or enable a workflow by changing
+account permissions.
 
 Run the subprocess regression suite on Windows and WSL for substantive changes.
 Test failure paths and continuation, not just happy paths. Deterministic fixture

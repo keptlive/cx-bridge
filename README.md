@@ -240,4 +240,12 @@ Linux, Windows and macOS on Python 3.10 and 3.12. Copy it to
 `.github/workflows/tests.yml` to enable it with a GitHub credential allowed to
 manage workflows. It is an example in this repository, not an active CI run.
 
-The local 0.2 work is described in [the debugging report](docs/debugging-0.2.md).
+Version 0.2 passed eight real authenticated provider calls covering fresh runs,
+resuming both providers, handoffs in both directions, and resuming the handoff
+sessions. Event audits verified that continuation used conversation history.
+See [live validation](docs/live-validation-0.2.md) and the earlier
+[debugging report](docs/debugging-0.2.md).
+
+The opt-in live checker is `python tests/live_smoke.py --live --directory PATH`.
+The directory must be visible to both providers. This consumes normal provider
+usage and remains separate from fixture tests and CI.

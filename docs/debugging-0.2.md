@@ -1,8 +1,10 @@
-# Local 0.2 debugging and extensions
+# 0.2 debugging and extensions: pre-live checkpoint
 
 Matt clarified that this is the existing cx connector and requested debugging
 and extension before the next push. The initial 0.1 source was already public;
-this follow-up remains local. No original cx command or user history was removed.
+the follow-up remained local at this checkpoint. No original cx command or user
+history was removed. Subsequent authorized live validation is recorded in
+[the release validation report](live-validation-0.2.md).
 
 ## Reproduced defects
 
@@ -53,7 +55,8 @@ Direct Windows and WSL repeats completed successfully. Doctor now reports why
 a probe failed and accepts a per-probe timeout, rather than showing only a
 boolean failure. Diagnostic exception details never echo private argv values.
 
-No live model response is claimed. macOS and the Python-version CI matrix remain
-unverified here; the optional GitHub Actions example is still inactive because
+At this checkpoint no live model response had been tested. macOS and the
+Python-version CI matrix remained unverified; the optional GitHub Actions example was inactive because
 the connected GitHub credential lacks workflow-upload permission. No account
-permissions were changed to work around it. No follow-up changes were pushed.
+permissions were changed to work around it. No follow-up changes had been pushed
+at this checkpoint.
