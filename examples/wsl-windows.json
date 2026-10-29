@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "default_target": "codex",
+  "timeout": 600,
+  "jobs_dir": "~/.local/state/cx-bridge/jobs",
+  "targets": {
+    "codex": {
+      "kind": "codex",
+      "command": ["/mnt/c/REPLACE_WITH_INSTALLED_CODEX_PATH/codex.exe"],
+      "path_style": "windows",
+      "home": "/mnt/c/Users/REPLACE_WITH_USERNAME/.codex"
+    },
+    "claude": {"kind": "claude", "command": ["claude"]}
+  }
+}
