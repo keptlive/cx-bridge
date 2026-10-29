@@ -1,5 +1,6 @@
 import contextlib
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -89,18 +90,41 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("invalid JSONL", err)
         self.assertEqual(self.records()[0]["status"], "failed")
 
+    def test_malformed_item_fails_cleanly_and_preserves_session(self):
+        code, _, err = self.call("run", "-C", str(self.work), "MALFORMED_ITEM")
+        self.assertEqual(code, 1)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("invalid item payload", err)
+        job = self.records()[0]
+        self.assertEqual(job["session"], "salvaged-session")
+        self.assertEqual(job["error"], "invalid_provider_output")
+
     def test_nonzero_exit_is_preserved(self):
         self.assertEqual(self.call("run", "-C", str(self.work), "NONZERO")[0], 7)
         self.assertEqual(self.records()[0]["exit_code"], 7)
 
-    @unittest.skipIf(os.name == "nt", "POSIX process group assertion")
     def test_timeout_kills_descendants_and_preserves_timeout_with_partial_json(self):
-        self.assertEqual(self.call("run", "--timeout", "0.5", "-C", str(self.work), "TIMEOUT")[0], 124)
+        self.assertEqual(self.call("run", "--timeout", "2", "-C", str(self.work), "TIMEOUT")[0], 124)
         self.assertEqual(self.records()[0]["status"], "timed_out")
+        self.assertEqual(self.records()[0]["session"], "timeout-session")
         pid = int((self.work / "child.pid").read_text())
-        stat = Path(f"/proc/{pid}/stat")
-        # A killed child can briefly remain a zombie awaiting init's reap.
-        self.assertTrue(not stat.exists() or stat.read_text().split()[2] == "Z")
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if handle:
+                exit_code = ctypes.c_ulong()
+                self.assertTrue(kernel.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(exit_code)))
+                kernel.CloseHandle(ctypes.c_void_p(handle))
+                self.assertNotEqual(exit_code.value, 259)  # STILL_ACTIVE
+        elif sys.platform.startswith("linux"):
+            stat = Path(f"/proc/{pid}/stat")
+            # A killed child can briefly remain a zombie awaiting init's reap.
+            self.assertTrue(not stat.exists() or stat.read_text().split()[2] == "Z")
+        else:
+            status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            self.assertTrue(not status or status.startswith("Z"))
 
     def test_missing_binary_has_terminal_record(self):
         self.cfg["targets"]["codex"]["command"] = ["cx-nonexistent-fixture"]
@@ -115,6 +139,166 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(all("command" not in r for r in self.records()))
         self.assertEqual(self.call("jobs")[0], 0)
         self.assertEqual(self.call("show", self.records()[0]["id"])[0], 0)
+
+    def test_json_output_and_saved_results_and_event_tails(self):
+        code, out, _ = self.call("run", "--json", "-C", str(self.work), "hello café")
+        self.assertEqual(code, 0)
+        result = json.loads(out)
+        job = result["job"]["id"]
+        self.assertEqual(result["job"]["status"], "succeeded")
+        self.assertIn("café", result["result"])
+        code, out, _ = self.call("result", job, "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["result"], result["result"])
+        code, out, _ = self.call("events", job, "--tail", "1", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["events"], [{"type": "turn.completed"}])
+        code, out, _ = self.call("jobs", "--json", "--limit", "1")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(json.loads(out)), 1)
+
+    def test_failed_job_has_structured_error_and_result_exit_code(self):
+        code, out, _ = self.call("run", "--json", "-C", str(self.work), "FAIL")
+        self.assertEqual(code, 1)
+        result = json.loads(out)
+        self.assertEqual(result["job"]["error"], "provider_incomplete_or_failed")
+        self.assertEqual(self.call("result", result["job"]["id"])[0], 1)
+
+    def test_json_validation_errors_are_machine_readable(self):
+        code, out, _ = self.call("run", "--to", "missing", "--json", "hello")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["error"]["code"], "bridge_error")
+
+    def test_json_launch_failure_still_identifies_job(self):
+        self.cfg["targets"]["codex"]["command"] = ["cx-nonexistent-fixture"]
+        self.save()
+        code, out, _ = self.call("run", "--json", "-C", str(self.work), "hello")
+        self.assertEqual(code, 1)
+        result = json.loads(out)
+        self.assertEqual(result["job"]["status"], "failed")
+        self.assertEqual(result["job"]["error"], "FileNotFoundError")
+        self.assertTrue(Path(result["directory"]).is_dir())
+
+    def test_handoff_uses_result_provenance_and_defaults_to_read_only(self):
+        self.assertEqual(self.call("run", "--to", "codex", "-w", "-C", str(self.work), "source-answer")[0], 0)
+        original = self.records()[0]
+        file = cli.find_job(self.root / "private jobs", original["id"])
+        source_result = (file.parent / "result.md").read_text(encoding="utf-8")
+        (file.parent / "runner.log").write_text("private-runner-context")
+        code, out, _ = self.call("handoff", original["id"], "--to", "claude", "--json", "Review prior answer")
+        self.assertEqual(code, 0)
+        job = json.loads(out)["job"]
+        self.assertEqual(job["source_job"], original["id"])
+        self.assertEqual(job["source_result_sha256"], hashlib.sha256(source_result.encode()).hexdigest())
+        self.assertEqual(job["target"], "claude")
+        self.assertEqual(job["mode"], "read-only")
+        self.assertEqual(job["cwd"], str(self.work.resolve()))
+        self.assertIn("source-answer", out)
+        self.assertNotIn("private-runner-context", out)
+        code, out, _ = self.call("handoff", job["id"], "--to", "codex", "--json", "Reconcile the feedback")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["job"]["source_job"], job["id"])
+
+    def test_handoff_rejects_failed_and_empty_source_results(self):
+        self.call("run", "-C", str(self.work), "FAIL")
+        job = self.records()[0]
+        self.assertEqual(self.call("handoff", job["id"], "--to", "claude", "review")[0], 1)
+        self.call("run", "-C", str(self.work), "valid")
+        job = next(r for r in self.records() if r["status"] == "succeeded")
+        file = cli.find_job(self.root / "private jobs", job["id"])
+        (file.parent / "result.md").write_text("")
+        self.assertEqual(self.call("handoff", job["id"], "--to", "claude", "review")[0], 1)
+
+    def test_workspace_target_mapping_is_preserved_across_handoff_and_resume(self):
+        other = self.root / "claude checkout"
+        other.mkdir()
+        self.cfg["workspaces"] = {"project": {"codex": str(self.work), "claude": str(other)}}
+        self.save()
+        code, out, _ = self.call("run", "--workspace", "project", "--json", "source")
+        self.assertEqual(code, 0)
+        source = json.loads(out)["job"]
+        code, out, _ = self.call("handoff", source["id"], "--to", "claude", "--json", "review")
+        self.assertEqual(code, 0)
+        handoff = json.loads(out)["job"]
+        self.assertEqual(handoff["cwd"], str(other.resolve()))
+        self.assertEqual(handoff["workspace"], "project")
+        self.cfg["workspaces"]["project"]["claude"] = str(self.work)
+        self.save()
+        code, out, _ = self.call("resume", handoff["id"], "--json", "follow-up")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["job"]["cwd"], str(other.resolve()))
+
+    def test_relative_profile_paths_are_anchored_to_config(self):
+        self.cfg["workspaces"] = {"project": {"*": self.work.name}}
+        self.cfg["jobs_dir"] = "relative jobs"
+        self.save()
+        code, out, _ = self.call("run", "--workspace", "project", "--json", "hello")
+        self.assertEqual(code, 0)
+        result = json.loads(out)
+        self.assertEqual(result["job"]["cwd"], str(self.work.resolve()))
+        self.assertTrue(Path(result["directory"]).is_relative_to(self.root / "relative jobs"))
+
+    def test_workspace_validation_and_missing_mapping(self):
+        self.cfg["workspaces"] = {"partial": {"claude": str(self.work)}}
+        self.save()
+        self.assertEqual(self.call("run", "--workspace", "missing", "hello")[0], 1)
+        self.assertEqual(self.call("run", "--workspace", "partial", "hello")[0], 1)
+        self.cfg["workspaces"]["invalid"] = {"absent-target": str(self.work)}
+        self.save()
+        self.assertEqual(self.call("doctor")[0], 1)
+
+    def test_target_environment_applies_without_leaking_config_values(self):
+        self.cfg["targets"]["claude"]["env"] = {"BRIDGE_FIXTURE_VALUE": "fixture-environment-value"}
+        self.save()
+        code, out, _ = self.call("run", "--to", "claude", "-C", str(self.work), "ENV_CHECK")
+        self.assertEqual(code, 0)
+        self.assertIn("fixture-environment-value", out)
+        code, out, _ = self.call("targets", "--json")
+        self.assertEqual(code, 0)
+        self.assertNotIn("fixture-environment-value", out)
+        self.assertNotIn("BRIDGE_FIXTURE_VALUE", out)
+        self.assertNotIn("fixture-environment-value", json.dumps(self.records()))
+
+    def test_invalid_target_environment_is_rejected(self):
+        for env in ([], {"invalid=name": "value"}, {"VALID": None}, {"VALID": "nul\0value"}):
+            with self.subTest(env=env):
+                self.cfg["targets"]["claude"]["env"] = env
+                self.save()
+                self.assertEqual(self.call("doctor")[0], 1)
+
+    def test_profile_listing_and_relative_wrapper_are_config_anchored(self):
+        self.cfg["workspaces"] = {"project": {"*": self.work.name}}
+        self.cfg["targets"]["claude"]["command"] = ["./wrapper"]
+        self.save()
+        cfg = cli.load_config(self.config)
+        self.assertEqual(cfg["targets"]["claude"]["command"][0], str((self.root / "wrapper").resolve()))
+        code, out, _ = self.call("workspaces", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)[0]["paths"]["*"], str(self.work.resolve()))
+
+    def test_corrupt_job_records_fail_without_traceback(self):
+        self.call("run", "-C", str(self.work), "hello")
+        file = cli.find_job(self.root / "private jobs", self.records()[0]["id"])
+        file.write_text("[]")
+        code, out, err = self.call("resume", file.parent.name, "--json", "continue")
+        self.assertEqual(code, 1)
+        self.assertIn("Invalid job record", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(json.loads(out)["error"]["code"], "bridge_error")
+
+    def test_events_can_inspect_malformed_provider_output(self):
+        self.call("run", "-C", str(self.work), "INVALID_JSON")
+        job = self.records()[0]["id"]
+        code, out, _ = self.call("events", job, "--json")
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(out)["events"][0]["invalid_json"])
+
+    def test_queue_does_not_echo_provider_logs(self):
+        queued = self.root / "queue.txt"
+        with patch.dict(os.environ, {"FAKE_QUEUE_FILE": str(queued), "FAKE_QUEUE_SECRET": "1"}):
+            code, out, err = self.call("say", "thread", "authorized fixture")
+        self.assertEqual(code, 0)
+        self.assertNotIn("fixture-private", out + err)
 
     def test_no_shell_prompt_injection(self):
         sentinel = self.work / "injected"

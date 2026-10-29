@@ -9,6 +9,7 @@ cx-bridge run --to codex -C ./project "Explain how authentication works"
 cx-bridge run --to claude -C ./project "Review the authentication flow"
 cx-bridge jobs
 cx-bridge resume JOB_ID "Check the edge case we just discussed"
+cx-bridge handoff JOB_ID --to claude "Review this answer for mistakes"
 ```
 
 Either agent can invoke these commands through its terminal tool, when the user
@@ -39,6 +40,11 @@ PYTHONPATH=src python3 -m cx_bridge --help
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+To verify the installed console entry point from a clean environment, build a
+wheel with `python -m pip wheel --no-deps --wheel-dir dist .`, then run
+`python tests/package_smoke.py dist/cx_agent_bridge-0.2.0-py3-none-any.whl`.
+The smoke test uses fixtures, so it consumes no model usage.
+
 ## Configure different setups
 
 Default configuration: `~/.config/cx-bridge/config.json`. Override it with
@@ -65,6 +71,32 @@ omit them to use the provider's defaults. Per-run `-m` and `-e` override them.
 No particular model, account, username, home directory, host, or repository is
 required. Remove a target if you only have one provider installed.
 
+Targets can also declare an `env` object for a provider-specific home, PATH or
+runtime settings. These values are inherited only by that target's processes,
+are never printed by `targets`/`doctor`, and are not stored in job records.
+Keep actual secrets in private config or the provider's login store. `home`
+selects the session index used by `threads`; use `env.CODEX_HOME` when you also
+need to select the Codex runtime's home. Paths in `home`, `jobs_dir`, named
+workspaces and relative executable names resolve against the config directory.
+
+Named workspaces can map a logical project to a shared path or different paths
+for each target:
+
+```json
+"workspaces": {
+  "project": {
+    "codex": "/mnt/c/projects/example",
+    "claude": "/home/example/src/project"
+  },
+  "shared": {"*": "../project"}
+}
+```
+
+Run `cx-bridge run --workspace project --to claude "Review the changes"`.
+`--workspace` and `-C` are mutually exclusive. Paths must be accessible from the
+bridge's environment. Mappings select a working directory; they never copy or
+synchronize repositories. `targets` and `workspaces` list the configured choices.
+
 `command` is an argv array, **not a shell string**. It may name an absolute
 executable or a trusted wrapper. Prompts go through stdin for task execution.
 For launchers that cross environments, the wrapper must preserve stdin, stdout,
@@ -80,18 +112,38 @@ never put them in a command array or commit private configurations.
 | `run [--to TARGET] [-C DIR] [-w] [-m MODEL] [-e EFFORT] [-n NAME] PROMPT` | Run a task, defaulting to read-only |
 | `review [--to TARGET] [-C DIR] [--base REF] [FOCUS]` | Request a correctness review |
 | `resume JOB_ID PROMPT` | Continue the same provider session and workspace |
+| `handoff JOB_ID --to TARGET PROMPT` | Give another target a successful job's result as reference context |
 | `jobs` / `show JOB_ID` | Inspect recent jobs or structured status |
+| `result JOB_ID` / `events JOB_ID --tail 25` | Read the saved result or recent raw provider events |
+| `targets` / `workspaces` | List configured target summaries or workspace mappings |
 | `doctor` | Check executables and CLI capabilities without inference |
 | `threads [QUERY] [--to CODEX_TARGET]` | Search the local Codex session index |
 | `say THREAD MESSAGE [--to CODEX_TARGET]` | Queue an authorized message into Codex desktop |
 | `dispatch THREAD JOB.md [--no-wait] [--timeout SECONDS]` | Dispatch to Codex desktop and wait for a unique receipt |
 
 Use `-` as PROMPT to read stdin. `--timeout SECONDS` also applies to `run`,
-`review` and `resume`. Resuming preserves the original permission mode, provider
+`review`, `resume` and `handoff`. Resuming preserves the original permission mode, provider
 configuration and workspace; it cannot silently switch to a different target.
 A changed target configuration requires a new job. Model/effort can be changed
 explicitly on resume. Review base/focus are instructions to the agent, not a
 deterministic substitute for checking a diff yourself.
+
+`--json` on `run`, `review`, `resume` and `handoff` emits a single object with
+`job`, `result` and `directory`, while diagnostics stay on stderr. Preflight
+errors emit an `error` object. Nonzero exit codes still indicate failure.
+`jobs`, `targets`, `workspaces`, `result` and `events` also support `--json`;
+`show` always emits JSON. `jobs --limit N` and `events --tail N` accept 1–10,000.
+Malformed raw event lines are inspectable through `events --json` as entries
+marked `invalid_json`.
+
+Handoff transfers the saved result, not raw logs, credentials or the original
+provider's session. It records `source_job` and a SHA-256 fingerprint of the
+shared result text. The source must have succeeded and its result must be no
+larger than 1 MiB. Each handoff needs an explicit target and a new user task;
+there is no automatic back-and-forth loop. It defaults to read-only even when
+the source had write access. A named source workspace is mapped to the new
+target automatically; otherwise the source's working directory is retained.
+Use `--workspace` or `-C` to explicitly choose another destination.
 
 Codex `queue` availability varies with installation. `doctor` reports it. No
 desktop messaging is attempted automatically. Claude uses fresh tasks and saved
@@ -123,7 +175,7 @@ it. Model runs consume the signed-in provider's normal usage or billing.
 Every invocation creates a unique job directory with:
 
 * `job.json`: target, workspace, permission mode, parent/session IDs, timestamps,
-  terminal status and exit code.
+  handoff provenance, terminal status, failure code and process exit code.
 * `prompt.txt`: the scoped request.
 * `events.jsonl`: raw provider output.
 * `result.md`: extracted final response when the output is parseable.
@@ -134,6 +186,10 @@ only after a valid completion event, successful process exit and no reported
 provider error. A failed/partial run stays failed. Timeouts return 124 and stop
 the local process tree; interruption returns 130. There is no automatic retry.
 Remote workers behind custom launchers need their own cancellation mechanism.
+If a timeout or malformed later event interrupts a response, the bridge keeps
+earlier valid session IDs and any recovered result text. A failed run stays
+failed even when it has a usable continuation ID. Use `events` to inspect the
+failure, then deliberately `resume` it if appropriate.
 
 `doctor` performs version/help probes, not inference or an authentication check.
 It does not print raw help, environment variables or credentials. Session locks
@@ -179,3 +235,5 @@ An optional [GitHub Actions test matrix](examples/github-actions.yml) covers
 Linux, Windows and macOS on Python 3.10 and 3.12. Copy it to
 `.github/workflows/tests.yml` to enable it with a GitHub credential allowed to
 manage workflows. It is an example in this repository, not an active CI run.
+
+The local 0.2 work is described in [the debugging report](docs/debugging-0.2.md).
