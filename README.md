@@ -197,6 +197,10 @@ prevent concurrent continuation by this bridge. After an OS crash, inspect the
 PID recorded in a lock before manually removing a stale lock. Runs started
 outside the bridge are not covered by its locks.
 
+Failed diagnostic probes report a bounded reason such as `timeout`, `exit:1`
+or an OS error type, without echoing private command arguments. For a slow
+installation, use `doctor --timeout 30` to change the deadline per probe.
+
 Keep job directories private: prompts, results and provider logs may contain
 private project data. POSIX directories/files use owner-only permissions. On
 Windows and shared/mounted filesystems, configure the parent directory ACLs.

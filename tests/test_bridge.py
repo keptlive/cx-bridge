@@ -341,6 +341,13 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(all(json.loads(line)["healthy"] for line in out.splitlines()))
         self.assertEqual(self.records(), [])
 
+    def test_doctor_reports_timeout_without_echoing_private_command(self):
+        with patch.object(cli.subprocess, "run", side_effect=subprocess.TimeoutExpired(["private-argv-value"], 15)):
+            code, out, err = self.call("doctor", "--timeout", "0.1")
+        self.assertEqual(code, 1)
+        self.assertTrue(all(json.loads(line)["issues"]["version"] == "timeout" for line in out.splitlines()))
+        self.assertNotIn("private-argv-value", out + err)
+
     def test_doctor_accepts_task_cli_without_optional_desktop_queue(self):
         with patch.dict(os.environ, {"FAKE_NO_QUEUE": "1"}):
             code, out, _ = self.call("doctor")

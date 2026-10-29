@@ -456,29 +456,37 @@ def dispatch(args, cfg):
     raise BridgeError(f"Dispatch wait timed out; remote work may still be running. Receipt: {receipt}")
 
 
-def doctor(cfg):
+def doctor(cfg, timeout=15):
     bad = False
     for name, target in cfg["targets"].items():
         command = target["command"]
         env = provider_env(target)
         resolved = shutil.which(command[0], path=env.get("PATH"))
-        checks = {}
+        checks, issues = {}, {}
         if resolved:
             for label, suffix in (("version", ["--version"]), ("run", ["exec", "--help"] if target["kind"] == "codex" else ["--help"]),
                                   ("queue", ["queue", "--help"]) if target["kind"] == "codex" else ("resume", ["--help"])):
                 try:
-                    response = subprocess.run(command + suffix, env=env, capture_output=True, timeout=15)
+                    response = subprocess.run(command + suffix, env=env, capture_output=True, timeout=timeout)
                     checks[label] = response.returncode == 0
+                    if response.returncode:
+                        issues[label] = "exit:" + str(response.returncode)
                     if label == "run" and target["kind"] == "claude":
                         checks["required_flags"] = all(flag in response.stdout for flag in
                                                         (b"--output-format", b"--strict-mcp-config", b"--setting-sources", b"--tools", b"--permission-mode"))
-                except (OSError, subprocess.TimeoutExpired):
+                        if not checks["required_flags"]:
+                            issues["required_flags"] = "missing_required_flags"
+                except subprocess.TimeoutExpired:
                     checks[label] = False
+                    issues[label] = "timeout"
+                except OSError as exc:
+                    checks[label] = False
+                    issues[label] = type(exc).__name__
         # Queue support is optional; a CLI without desktop queue still runs tasks.
         healthy = bool(resolved) and all(value for label, value in checks.items() if label != "queue")
         bad |= not healthy
         print(json.dumps({"target": name, "kind": target["kind"], "executable_found": bool(resolved),
-                          "checks": checks, "healthy": healthy}))
+                          "checks": checks, "issues": issues, "healthy": healthy}))
     return 1 if bad else 0
 
 
@@ -524,7 +532,8 @@ def parser():
     p.add_argument("--config", type=Path, default=config_path())
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="Write default config without replacing existing files")
-    sub.add_parser("doctor", help="Check executables and capabilities without inference")
+    diagnostic = sub.add_parser("doctor", help="Check executables and capabilities without inference")
+    diagnostic.add_argument("--timeout", type=positive, default=15, help="Deadline per version/help probe")
     for name in ("run", "review", "resume", "handoff"):
         cmd = sub.add_parser(name)
         if name in ("resume", "handoff"):
@@ -599,7 +608,7 @@ def main(argv=None):
                 raise BridgeError("A prompt is required (use '-' to read stdin)")
             return run_job(args, cfg)
         if args.command == "doctor":
-            return doctor(cfg)
+            return doctor(cfg, args.timeout)
         if args.command == "jobs":
             rows = []
             for file in sorted(jobs_root(cfg).glob("*/*/job.json"))[-args.limit:]:

@@ -33,7 +33,7 @@ resolve consistently against the selected configuration file.
 
 ## Verification boundaries
 
-The regression suite passes 41 tests in WSL and 40 tests on Windows, with one
+The regression suite passes 42 tests in WSL and 41 tests on Windows, with one
 WSL-only test skipped on Windows. Both environments test actual local process
 tree termination on timeout. Tests use real subprocess fixtures and private
 temporary configurations. They never contact a model or send a message to
@@ -47,6 +47,11 @@ The installed Codex and Claude CLIs accept all eight checked combinations of
 provider, read-only/workspace-write mode, and fresh/resumed session through their
 help parsers. Those checks do not start inference. The local installation reports
 version 0.2.0; the original installed cx script remains byte-for-byte unchanged.
+
+A later diagnostic encountered one transient Codex version-probe timeout.
+Direct Windows and WSL repeats completed successfully. Doctor now reports why
+a probe failed and accepts a per-probe timeout, rather than showing only a
+boolean failure. Diagnostic exception details never echo private argv values.
 
 No live model response is claimed. macOS and the Python-version CI matrix remain
 unverified here; the optional GitHub Actions example is still inactive because
