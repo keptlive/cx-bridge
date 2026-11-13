@@ -1,25 +1,34 @@
 # cx-bridge
 
-A small two-way bridge between **Claude Code and Codex**, using their installed
-CLIs and existing sign-ins. Send a scoped task to either agent, read its result,
-and continue its saved session. Python 3.10+, no runtime dependencies.
+A small, zero-dependency bridge and stdio MCP server across **Claude Code,
+Codex, Antigravity (`agy`), ACP agents, and external agent frameworks**
+(LangGraph, CrewAI, AutoGen, PydanticAI, OpenCode, Goose, Gemini CLI, and custom
+runners), using their installed CLIs or Python handlers and existing sign-ins.
+Send a scoped task to any agent, read its result, continue its saved session,
+hand off verified outputs, and exchange inline messages across live sessions.
+Python 3.10+, zero runtime dependencies.
 
 ```sh
 cx-bridge run --to codex -C ./project "Explain how authentication works"
 cx-bridge run --to claude -C ./project "Review the authentication flow"
-cx-bridge jobs
+cx-bridge run --to agy -C ./project "Audit edge cases in session handling"
 cx-bridge resume JOB_ID "Check the edge case we just discussed"
-cx-bridge handoff JOB_ID --to claude "Review this answer for mistakes"
+cx-bridge handoff JOB_ID --to agy "Cross-check this answer for mistakes"
+
+# Inline peer messaging across Codex, Antigravity, and Claude Code
+cx-bridge say --to claude --from codex -C ./project "Check parser.py line 142"
+cx-bridge say --to claude --from agy --wake SESSION_ID "Do you agree on the fix?"
+cx-bridge say --to agy --from claude ide "Inspect the open editor tab"
+cx-bridge say --to codex --from agy THREAD_ID "Re-run the unit suite"
 ```
 
-Either agent can invoke these commands through its terminal tool, when the user
-has authorized delegation. This is two-way **task and result exchange**. It does
-not inject text into an already running interactive Claude Code terminal.
-Codex desktop messaging is a separate, optional capability.
+Any agent can invoke these commands through its terminal tool—or call typed
+tools via `cx-bridge mcp`—when the user has authorized delegation.
 
 ## Install
 
-Install Codex and/or Claude Code and sign in using their own tools first.
+Install Codex, Claude Code, and/or Antigravity (`agy`) and sign in using their
+own tools first.
 
 ```sh
 python3 -m venv .venv
@@ -42,8 +51,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 To verify the installed console entry point from a clean environment, build a
 wheel with `python -m pip wheel --no-deps --wheel-dir dist .`, then run
-`python tests/package_smoke.py dist/cx_agent_bridge-0.2.0-py3-none-any.whl`.
-The smoke test uses fixtures, so it consumes no model usage.
+`python tests/package_smoke.py dist/cx_agent_bridge-0.3.0-py3-none-any.whl`.
+The smoke test uses deterministic fixtures, so it consumes no model usage.
 
 ## Configure different setups
 
@@ -60,50 +69,57 @@ an automatically discovered configuration in an untrusted project.
   "jobs_dir": "~/.local/state/cx-bridge/jobs",
   "targets": {
     "codex": {"kind": "codex", "command": ["codex"]},
-    "claude": {"kind": "claude", "command": ["claude"]}
+    "claude": {"kind": "claude", "command": ["claude"]},
+    "agy": {"kind": "agy", "command": ["agy"]}
   }
 }
 ```
 
-Targets are names, so you can add `codex-work`, `claude-review`, or multiple
-versions of the same provider. Each supports an optional `model` and `effort`;
-omit them to use the provider's defaults. Per-run `-m` and `-e` override them.
-No particular model, account, username, home directory, host, or repository is
-required. Remove a target if you only have one provider installed.
+Targets are names (`kind` is `"codex"`, `"claude"`, `"agy"` / `"antigravity"`,
+`"acp"` for Agent Client Protocol servers, or `"generic"` / `"framework"` /
+`"custom"` for Python frameworks and declarative CLIs), so you can define
+multiple profiles such as `codex-work`, `claude-review`, `agy-argon`,
+`opencode`, or `langgraph`. Remove any target you do not have installed. See
+[docs/connectors.md](docs/connectors.md) for **LangGraph, CrewAI, AutoGen,
+PydanticAI, ACP (`opencode acp`, `goose acp`), Gemini CLI, and custom CLI**
+connectors (`BridgeConnector` + `serve_framework_target`).
 
-Targets can also declare an `env` object for a provider-specific home, PATH or
-runtime settings. These values are inherited only by that target's processes,
-are never printed by `targets`/`doctor`, and are not stored in job records.
-Keep actual secrets in private config or the provider's login store. `home`
-selects the session index used by `threads`; use `env.CODEX_HOME` when you also
-need to select the Codex runtime's home. Paths in `home`, `jobs_dir`, named
-workspaces and relative executable names resolve against the config directory.
+Optional target properties:
 
-Named workspaces can map a logical project to a shared path or different paths
-for each target:
+* `model` / `effort`: defaults overridden per run with `-m` and `-e`.
+* `path_style`: `"native"` (default), `"windows"` (translates WSL `/mnt/<drive>`
+  paths via `wslpath -w` and rejects `\\wsl.localhost` UNC workspaces without
+  silent mirroring), or `"wsl"` (when running on Windows against a WSL binary
+  such as Linux `claude`, translating `C:\...` and `\\wsl.localhost\...` paths
+  and launching via `wsl.exe [-d wsl_distro] --cd ... --exec` with no shell).
+* `wsl_distro`: optional WSL distribution name (e.g. `"Ubuntu"`) when
+  `path_style` is `"wsl"`.
+* `bin_dir`: optional parent directory (such as `.../OpenAI/Codex/bin`) to
+  automatically select the newest `<hash>/codex.exe` across app updates. Even
+  without `bin_dir`, rotated `<hex-hash>/codex.exe` paths automatically fall
+  back to the newest sibling build.
+* `chat_command`: optional argv array for Antigravity IDE live window delivery
+  (`chat -r -m ask|agent -` over `stdin`, never `argv`).
+* `home`: session index directory used by Codex `threads`.
+* `env`: environment variable overrides inherited only by that target (forwarded
+  via `WSLENV` `/u` when `path_style` is `"wsl"`), never echoed by `targets` or
+  `doctor`, and never persisted in `job.json`.
+
+Named workspaces can map a logical project to a shared path or per-target paths:
 
 ```json
 "workspaces": {
   "project": {
     "codex": "/mnt/c/projects/example",
+    "agy": "/mnt/c/projects/example",
     "claude": "/home/example/src/project"
   },
   "shared": {"*": "../project"}
 }
 ```
 
-Run `cx-bridge run --workspace project --to claude "Review the changes"`.
-`--workspace` and `-C` are mutually exclusive. Paths must be accessible from the
-bridge's environment. Mappings select a working directory; they never copy or
-synchronize repositories. `targets` and `workspaces` list the configured choices.
-
-`command` is an argv array, **not a shell string**. It may name an absolute
-executable or a trusted wrapper. Prompts go through stdin for task execution.
-For launchers that cross environments, the wrapper must preserve stdin, stdout,
-exit status and the intended workspace. See [setup examples](docs/setups.md).
-Configuration is trusted code: do not accept a command array from another agent
-or an untrusted repository. Keep credentials in the provider's own login store;
-never put them in a command array or commit private configurations.
+See [setup examples](docs/setups.md) for cross-OS WSL/Windows, Claude Code live
+hooks, and stdio MCP setups.
 
 ## Commands
 
@@ -113,139 +129,80 @@ never put them in a command array or commit private configurations.
 | `review [--to TARGET] [-C DIR] [--base REF] [FOCUS]` | Request a correctness review |
 | `resume JOB_ID PROMPT` | Continue the same provider session and workspace |
 | `handoff JOB_ID --to TARGET PROMPT` | Give another target a successful job's result as reference context |
+| `say [--to TARGET] [--from SENDER] [-C DIR] [--wake] [THREAD] MESSAGE` | Send an inline message to Codex, Claude, or Antigravity |
+| `dispatch [--to TARGET] [--from SENDER] [--wake] [--no-wait] THREAD JOB.md` | Dispatch a scoped job file and await a unique `DONE.<uuid>.txt` receipt |
+| `inbox [list\|ack] [--to TARGET] [--claim] [--all] [--json]` | Inspect, atomically claim, or acknowledge inline inbox messages |
+| `hook claude [--to TARGET]` | Inject pending inline messages into live interactive Claude Code sessions |
+| `mcp [--allow-write] [--identity NAME]` | Serve typed `cx-bridge` tools over stdio JSON-RPC 2.0 (MCP) |
+| `threads [QUERY] [--to TARGET] [--all] [--json]` | List known sessions/threads across Codex, Claude, and Antigravity |
 | `jobs` / `show JOB_ID` | Inspect recent jobs or structured status |
 | `result JOB_ID` / `events JOB_ID --tail 25` | Read the saved result or recent raw provider events |
 | `targets` / `workspaces` | List configured target summaries or workspace mappings |
 | `doctor` | Check executables and CLI capabilities without inference |
-| `threads [QUERY] [--to CODEX_TARGET]` | Search the local Codex session index |
-| `say THREAD MESSAGE [--to CODEX_TARGET]` | Queue an authorized message into Codex desktop |
-| `dispatch THREAD JOB.md [--no-wait] [--timeout SECONDS]` | Dispatch to Codex desktop and wait for a unique receipt |
 
-Use `-` as PROMPT to read stdin. `--timeout SECONDS` also applies to `run`,
-`review`, `resume` and `handoff`. Resuming preserves the original permission mode, provider
-configuration and workspace; it cannot silently switch to a different target.
-A changed target configuration requires a new job. Model/effort can be changed
-explicitly on resume. Review base/focus are instructions to the agent, not a
-deterministic substitute for checking a diff yourself.
+Use `-` as `PROMPT` or `MESSAGE` to read stdin. `--json` emits structured JSON
+on stdout while keeping diagnostics on stderr.
 
-`--json` on `run`, `review`, `resume` and `handoff` emits a single object with
-`job`, `result` and `directory`, while diagnostics stay on stderr. Preflight
-errors emit an `error` object. Nonzero exit codes still indicate failure.
-`jobs`, `targets`, `workspaces`, `result` and `events` also support `--json`;
-`show` always emits JSON. `jobs --limit N` and `events --tail N` accept 1–10,000.
-Malformed raw event lines are inspectable through `events --json` as entries
-marked `invalid_json`.
+## Inline messaging across all three agents
 
-Handoff transfers the saved result, not raw logs, credentials or the original
-provider's session. It records `source_job` and a SHA-256 fingerprint of the
-shared result text. The source must have succeeded and its result must be no
-larger than 1 MiB. Each handoff needs an explicit target and a new user task;
-there is no automatic back-and-forth loop. It defaults to read-only even when
-the source had write access. A named source workspace is mapped to the new
-target automatically; otherwise the source's working directory is retained.
-Use `--workspace` or `-C` to explicitly choose another destination.
+`cx-bridge` unifies inline messaging in every direction without unauthenticated
+network listeners or shell string interpolation:
 
-Codex `queue` availability varies with installation. `doctor` reports it. No
-desktop messaging is attempted automatically. Claude uses fresh tasks and saved
-session continuation, not desktop queue injection. Use exact job IDs when
-resuming; ambiguous prefixes are rejected. Old `cx` jobs are retained by the
-original script, rather than silently imported or rewritten.
+1. **To Claude Code (from Codex or Antigravity):**
+   * **Live interactive terminal:** Wire `cx-bridge hook claude` into
+     `UserPromptSubmit`, `PostToolUse`, and `Stop` in `~/.claude/settings.json`
+     (see [docs/setups.md](docs/setups.md)). Messages queued via
+     `cx-bridge say --to claude --from codex ...` or MCP `bridge_say` are
+     atomically claimed once in FIFO order and injected inline via
+     `additionalContext` (or wake an idle-bound session once on `Stop`, with
+     `stop_hook_active` loop protection so agents cannot enter unattended
+     ping-pong loops).
+   * **Synchronous inline turn (`--wake`):** `cx-bridge say --to claude --wake SESSION_ID "message"`
+     resumes the saved job or Claude session immediately and prints the reply.
+   * **Direct inbox / MCP:** Any Claude session can also call `cx-bridge inbox --to claude --claim`
+     or MCP `bridge_inbox`.
+2. **To Antigravity (from Claude or Codex):**
+   * **Live IDE window (`ide`):** With `chat_command` configured,
+     `cx-bridge say --to agy --from claude ide "message"` streams the message
+     over `stdin` to the active Antigravity IDE chat (`ask` mode by default;
+     `-w` selects `agent` mode), and `dispatch --to agy ide JOB.md` dispatches a
+     scoped job awaiting a unique `DONE.<uuid>.txt` receipt.
+   * **Headless conversation (`--wake`) or inbox:** Resume any `--conversation`
+     UUID synchronously via `agy --input-format text --output-format stream-json`,
+     or queue into the durable inbox for `cx-bridge inbox` / MCP `bridge_inbox`.
+3. **To Codex (from Claude or Antigravity):**
+   * Queues directly via `codex queue [--resume if --wake] --thread THREAD --message ...`
+     (with optional `--inbox-only` durable inbox delivery) and records an audit
+     entry in `<jobs_dir>/inbox/`.
+
+Every peer message delivered through hooks, `--from`, `inbox --claim`, or MCP is
+wrapped in an explicit JSON provenance envelope marking it as **untrusted peer
+reference data** (with sender, timestamp, and SHA-256 digest), never user
+authorization.
 
 ## Permissions and execution
 
-Codex runs with `read-only` by default; `-w` chooses `workspace-write`. Its normal
-sandbox applies, and approval requests are denied for these noninteractive jobs.
-The bridge never enables a bypass flag. Codex's own trusted configuration still
-applies, including any integrations you have enabled there.
+* **Codex:** `read-only` sandbox by default; `-w` chooses `workspace-write`,
+  with `-a never` noninteractive approval denial.
+* **Antigravity (`agy`):** `--mode plan --sandbox` by default (read-only
+  research/planning); `-w` chooses `--mode accept-edits --sandbox` (auto-approve
+  file edits while refusing unapproved commands in headless mode). Any
+  `denied_actions` or non-`SUCCESS` status marks the job `failed`.
+* **Claude Code:** Receives only `Read,Grep,Glob` by default (`Edit,Write` added
+  with `-w`), `--permission-mode dontAsk`, empty MCP config, and hooks disabled
+  so headless tasks never inherit shell tools or steal interactive inbox items.
+* **MCP Server (`cx-bridge mcp`):** Read-only by default—rejects `write: true`
+  and refuses to resume `workspace-write` parent jobs unless explicitly started
+  with `--allow-write`. `--identity` pins non-spoofable sender attribution.
 
-Claude receives only `Read,Grep,Glob` by default. With `-w`, it also receives
-`Edit,Write`. Shell execution, delegation tools, inherited MCP servers and hooks
-are unavailable in this adapter. Tools cannot prompt for additional permissions.
-This is a tool restriction, **not an OS filesystem sandbox**. Provider policies
-and managed settings still apply. If a task needs shell tests in Claude, use an
-interactive Claude session or a separately sandboxed wrapper; this adapter does
-not silently expand its permissions.
+## Debugging and live validation
 
-User authorization remains necessary for delegation, publishing and messaging.
-The bridge does not establish authority merely because another agent can call
-it. Model runs consume the signed-in provider's normal usage or billing.
+Every `run`, `review`, `resume`, and `handoff` creates a private `0700` job
+directory containing `job.json`, `prompt.txt`, `events.jsonl`, `result.md`, and
+`runner.log` (never echoed automatically). Durable inline messages live in
+`<jobs_dir>/inbox/` with `0600` atomic writes and lock files under `.locks/`.
 
-## Debugging
-
-Every invocation creates a unique job directory with:
-
-* `job.json`: target, workspace, permission mode, parent/session IDs, timestamps,
-  handoff provenance, terminal status, failure code and process exit code.
-* `prompt.txt`: the scoped request.
-* `events.jsonl`: raw provider output.
-* `result.md`: extracted final response when the output is parseable.
-* `runner.log`: provider stderr, kept private and never echoed automatically.
-
-The directory is announced on stderr before execution. Status is `succeeded`
-only after a valid completion event, successful process exit and no reported
-provider error. A failed/partial run stays failed. Timeouts return 124 and stop
-the local process tree; interruption returns 130. There is no automatic retry.
-Remote workers behind custom launchers need their own cancellation mechanism.
-If a timeout or malformed later event interrupts a response, the bridge keeps
-earlier valid session IDs and any recovered result text. A failed run stays
-failed even when it has a usable continuation ID. Use `events` to inspect the
-failure, then deliberately `resume` it if appropriate.
-
-`doctor` performs version/help probes, not inference or an authentication check.
-It does not print raw help, environment variables or credentials. Session locks
-prevent concurrent continuation by this bridge. After an OS crash, inspect the
-PID recorded in a lock before manually removing a stale lock. Runs started
-outside the bridge are not covered by its locks.
-
-Failed diagnostic probes report a bounded reason such as `timeout`, `exit:1`
-or an OS error type, without echoing private command arguments. For a slow
-installation, use `doctor --timeout 30` to change the deadline per probe.
-
-Keep job directories private: prompts, results and provider logs may contain
-private project data. POSIX directories/files use owner-only permissions. On
-Windows and shared/mounted filesystems, configure the parent directory ACLs.
-Delete or archive job history yourself; there is no hidden retention policy.
-
-## Desktop dispatch
-
-Dispatch is useful for tasks requiring the desktop's browser. The target needs
-the same Codex home/sign-in as the desktop, and a working `queue` command. The
-job file and receipt must be visible to both the bridge and desktop agent.
-Each dispatch requests `DONE.<unique-id>.txt` next to the job file. It preserves
-an existing `DONE.txt` and never mistakes it for the current result.
-
-A dispatch timeout ends the local wait; desktop work may continue. The receipt
-is a plain text report, not a machine-verified proof of task success. `--no-wait`
-prints the receipt location and returns after queue admission. The original job
-must specify the intended browser, budget and authorized actions.
-
-## Development and compatibility
-
-See [the original workflow baseline](docs/baseline.md) for preserved paths and
-intentional differences. Tests run real deterministic subprocess fixtures for
-both provider protocols. They do not contact models or publish/send anything.
-Current compatibility targets are the installed CLI help contracts, plus:
-
-* [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server)
-* [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference)
-* [Running Claude Code programmatically](https://code.claude.com/docs/en/headless)
-
-The bridge currently uses CLI task execution, not App Server RPC or an MCP
-server. Those can be added as separate transports without changing the public
-task interface. It does not launch an unauthenticated listener or require a
-hosted relay.
-
-An optional [GitHub Actions test matrix](examples/github-actions.yml) covers
-Linux, Windows and macOS on Python 3.10 and 3.12. Copy it to
-`.github/workflows/tests.yml` to enable it with a GitHub credential allowed to
-manage workflows. It is an example in this repository, not an active CI run.
-
-Version 0.2 passed eight real authenticated provider calls covering fresh runs,
-resuming both providers, handoffs in both directions, and resuming the handoff
-sessions. Event audits verified that continuation used conversation history.
-See [live validation](docs/live-validation-0.2.md) and the earlier
-[debugging report](docs/debugging-0.2.md).
-
-The opt-in live checker is `python tests/live_smoke.py --live --directory PATH`.
-The directory must be visible to both providers. This consumes normal provider
-usage and remains separate from fixture tests and CI.
+`doctor` performs `--version` and `--help` capability checks only—never model
+inference. The opt-in live checker `python tests/live_smoke.py --live --directory PATH`
+validates real authenticated runs, session continuation memory, and directional
+handoffs across configured providers (`--providers codex,claude,agy`).

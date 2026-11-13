@@ -21,6 +21,10 @@ automatic repository mirroring are not copied into the public package.
 Existing user job history and the installed command remain available unchanged.
 No existing product, navigation, account or remote service was modified.
 
-Two-way means either agent can submit a task to the other and receive the result.
-Live Claude terminal injection, an MCP server, a hosted relay and fully managed
-remote cancellation are outside this release's implemented capabilities.
+In `0.2`, two-way meant either agent could submit a task to the other and
+receive the result; live Claude terminal injection, an MCP server, a hosted
+relay and fully managed remote cancellation were outside that initial scope.
+In `0.3`, opt-in hook-based inline inbox delivery (`cx-bridge hook`), a local
+stdio MCP server (`cx-bridge mcp`), Antigravity (`agy`), and external
+framework/ACP connectors (`docs/connectors.md`) were added while keeping a
+hosted network relay and remote process cancellation out of scope.

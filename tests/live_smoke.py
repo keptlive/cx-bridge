@@ -1,6 +1,6 @@
 """Opt-in live provider tests. Uses real account usage; never runs in unittest.
 
-Run with --live --directory PATH visible to both providers. All raw outputs
+Run with --live --directory PATH visible to all tested providers. All raw outputs
 remain in the newly created private test directory, outside the source tree.
 """
 import argparse
@@ -32,6 +32,17 @@ def tool_types(response):
                 for part in event.get("message", {}).get("content", []):
                     if part.get("type") == "tool_use":
                         kinds.add(part.get("name", "tool_use"))
+            if event.get("event") == "step_update":
+                step_type = event.get("step_update", {}).get("step_type")
+                if step_type and step_type not in ("user_input", "agent_response", "thinking"):
+                    kinds.add(step_type)
+            if event.get("event") == "tool_use":
+                for tname in event.get("tools", []):
+                    kinds.add(str(tname))
+            if event.get("method") == "session/update":
+                upd = event.get("params", {}).get("update", {})
+                if upd.get("sessionUpdate") in ("tool_call", "tool_call_update"):
+                    kinds.add(str(upd.get("kind") or "acp_tool"))
     return sorted(kinds)
 
 
@@ -40,16 +51,24 @@ def main():
     parser.add_argument("--live", action="store_true", required=True)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=cli.config_path())
+    parser.add_argument("--providers", help="Comma-separated target names (defaults to configured codex,claude,agy targets)")
     parser.add_argument("--timeout", type=cli.positive, default=240)
     args = parser.parse_args()
     if os.name != "nt":
         os.umask(0o077)
+    cfg = cli.load_config(args.config.expanduser().resolve())
+    if args.providers:
+        providers = [p.strip() for p in args.providers.split(",") if p.strip()]
+    else:
+        providers = [p for p in ("codex", "claude", "agy") if p in cfg["targets"]]
+    if len(providers) < 2:
+        raise cli.BridgeError("Live smoke requires at least two configured targets")
     root = args.directory.expanduser().resolve() / ("live-" + uuid.uuid4().hex[:12])
     root.mkdir(parents=True, mode=0o700)
-    tokens = {kind: uuid.uuid4().hex for kind in ("codex", "claude")}
+    tokens = {kind: uuid.uuid4().hex for kind in providers}
     for kind, token in tokens.items():
         (root / (kind + "-fixture.txt")).write_text(token + "\n", encoding="utf-8")
-    record = {"started_at": datetime.now(timezone.utc).isoformat(), "steps": [], "live": True}
+    record = {"started_at": datetime.now(timezone.utc).isoformat(), "providers": providers, "steps": [], "live": True}
     base = [sys.executable, "-m", "cx_bridge", "--config", str(args.config.expanduser().resolve())]
 
     def invoke(label, argv, expected, session=None):
@@ -58,8 +77,6 @@ def main():
         stderr = root / (label + ".stderr.log")
         options = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         command = base + argv + ["--timeout", str(args.timeout), "--json"]
-        # Prompts have already been supplied as positional arguments; argparse
-        # supports options after the required positional prompt.
         with stdout.open("wb") as out, stderr.open("wb") as err:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=err, **options)
             try:
@@ -71,60 +88,114 @@ def main():
         except (ValueError, UnicodeError):
             response = {}
         job = response.get("job", {})
-        passed = process.returncode == 0 and job.get("status") == "succeeded" and response.get("result", "").strip() == expected and bool(job.get("session"))
+        passed = (
+            process.returncode == 0
+            and job.get("status") == "succeeded"
+            and response.get("result", "").strip() == expected
+            and bool(job.get("session"))
+        )
         tools = tool_types(response) if job.get("status") == "succeeded" else []
         passed = passed and job.get("mode") == "read-only" and job.get("cwd") == str(root)
         # A resume that secretly rereads the file cannot prove conversation memory.
         passed = passed and (bool(tools) if label.endswith("-fresh") else not tools)
         if session:
             passed = passed and job.get("session") == session
-        item = {"step": label, "passed": passed, "exit_code": process.returncode,
-                "job_id": job.get("id"), "session": job.get("session"),
-                "status": job.get("status"), "tool_types": tools,
-                "elapsed_seconds": round(time.monotonic() - started, 2)}
+        item = {
+            "step": label,
+            "passed": passed,
+            "exit_code": process.returncode,
+            "job_id": job.get("id"),
+            "session": job.get("session"),
+            "status": job.get("status"),
+            "tool_types": tools,
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+        }
         record["steps"].append(item)
         print(json.dumps(item), flush=True)
         return response if passed else None
 
     def fresh(kind):
-        return invoke(kind + "-fresh", ["run", "--to", kind, "-C", str(root),
-                      f"This is an authorized connector smoke test. Read {kind}-fixture.txt in the current workspace. "
-                      "Remember its full token for later turns. Reply exactly FRESH:<token> using the file contents, "
-                      "with no markdown or additional text. Do not modify any file or use unrelated services."], "FRESH:" + tokens[kind])
+        return invoke(
+            kind + "-fresh",
+            [
+                "run",
+                "--to",
+                kind,
+                "-C",
+                str(root),
+                f"This is an authorized connector smoke test. Read {kind}-fixture.txt in the current workspace. "
+                "Remember its full token for later turns. Reply exactly FRESH:<token> using the file contents, "
+                "with no markdown or additional text. Do not modify any file or use unrelated services.",
+            ],
+            "FRESH:" + tokens[kind],
+        )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {kind: pool.submit(fresh, kind) for kind in tokens}
+    with ThreadPoolExecutor(max_workers=len(providers)) as pool:
+        futures = {kind: pool.submit(fresh, kind) for kind in providers}
         originals = {kind: future.result() for kind, future in futures.items()}
-    for kind, original in originals.items():
+    for kind in providers:
+        original = originals[kind]
         if original:
-            invoke(kind + "-resume", ["resume", original["job"]["id"],
-                   "Without opening any files or using tools, recall the token from the earlier turn. "
-                   "Reply exactly RESUMED:<token> with no additional text."],
-                   "RESUMED:" + tokens[kind], session=original["job"]["session"])
-    for source, destination in (("codex", "claude"), ("claude", "codex")):
+            invoke(
+                kind + "-resume",
+                [
+                    "resume",
+                    original["job"]["id"],
+                    "Without opening any files or using tools, recall the token from the earlier turn. "
+                    "Reply exactly RESUMED:<token> with no additional text.",
+                ],
+                "RESUMED:" + tokens[kind],
+                session=original["job"]["session"],
+            )
+    pairs = [(src, dst) for src in providers for dst in providers if src != dst]
+    for source, destination in pairs:
         original = originals[source]
         if not original:
             continue
         label = source + "-to-" + destination
-        handoff = invoke(label, ["handoff", original["job"]["id"], "--to", destination,
-                         "This is an authorized connector handoff smoke test. Use only the prior agent output "
-                         "provided as reference. Extract and remember its token. Do not read files or use tools. "
-                         "Reply exactly HANDOFF:<token> with no markdown or additional text."], "HANDOFF:" + tokens[source])
+        handoff = invoke(
+            label,
+            [
+                "handoff",
+                original["job"]["id"],
+                "--to",
+                destination,
+                "This is an authorized connector handoff smoke test. Use only the prior agent output "
+                "provided as reference. Extract and remember its token. Do not read files or use tools. "
+                "Reply exactly HANDOFF:<token> with no markdown or additional text.",
+            ],
+            "HANDOFF:" + tokens[source],
+        )
         if handoff:
             fingerprint = hashlib.sha256(original["result"].encode("utf-8")).hexdigest()
-            if (handoff["job"]["session"] == original["job"]["session"]
+            if (
+                handoff["job"]["session"] == original["job"]["session"]
                 or handoff["job"].get("source_job") != original["job"]["id"]
-                or handoff["job"].get("source_result_sha256") != fingerprint):
+                or handoff["job"].get("source_result_sha256") != fingerprint
+            ):
                 record["steps"][-1]["passed"] = False
                 continue
-            invoke(label + "-resume", ["resume", handoff["job"]["id"],
-                   "Without tools or opening files, recall the token you received in the previous handoff. "
-                   "Reply exactly AGAIN:<token> with no additional text."],
-                   "AGAIN:" + tokens[source], session=handoff["job"]["session"])
-    record["fixture_files_unchanged"] = all((root / (kind + "-fixture.txt")).read_text(encoding="utf-8").strip() == token
-                                            for kind, token in tokens.items())
+            invoke(
+                label + "-resume",
+                [
+                    "resume",
+                    handoff["job"]["id"],
+                    "Without tools or opening files, recall the token you received in the previous handoff. "
+                    "Reply exactly AGAIN:<token> with no additional text.",
+                ],
+                "AGAIN:" + tokens[source],
+                session=handoff["job"]["session"],
+            )
+    expected_steps = len(providers) * 2 + len(pairs) * 2
+    record["fixture_files_unchanged"] = all(
+        (root / (kind + "-fixture.txt")).read_text(encoding="utf-8").strip() == token for kind, token in tokens.items()
+    )
     record["finished_at"] = datetime.now(timezone.utc).isoformat()
-    record["passed"] = len(record["steps"]) == 8 and all(step["passed"] for step in record["steps"]) and record["fixture_files_unchanged"]
+    record["passed"] = (
+        len(record["steps"]) == expected_steps
+        and all(step["passed"] for step in record["steps"])
+        and record["fixture_files_unchanged"]
+    )
     cli.write_json(root / "receipt.json", record)
     print(json.dumps({"passed": record["passed"], "receipt": str(root / "receipt.json"), "steps": len(record["steps"])}), flush=True)
     return 0 if record["passed"] else 1

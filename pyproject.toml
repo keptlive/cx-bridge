@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cx-agent-bridge"
-version = "0.2.0"
-description = "A portable, two-way CLI bridge for Claude Code and Codex"
+version = "0.3.0"
+description = "A portable CLI, MCP, ACP, and Python SDK bridge for Claude Code, Codex, Antigravity, and external agent frameworks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

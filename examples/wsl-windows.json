@@ -6,10 +6,20 @@
   "targets": {
     "codex": {
       "kind": "codex",
-      "command": ["/mnt/c/REPLACE_WITH_INSTALLED_CODEX_PATH/codex.exe"],
+      "bin_dir": "/mnt/c/Users/REPLACE_WITH_USERNAME/AppData/Local/OpenAI/Codex/bin",
+      "command": ["codex.exe"],
       "path_style": "windows",
       "home": "/mnt/c/Users/REPLACE_WITH_USERNAME/.codex"
     },
-    "claude": {"kind": "claude", "command": ["claude"]}
+    "claude": {
+      "kind": "claude",
+      "command": ["claude"]
+    },
+    "agy": {
+      "kind": "agy",
+      "command": ["/mnt/c/Users/REPLACE_WITH_USERNAME/AppData/Local/agy/bin/agy.exe"],
+      "chat_command": ["/mnt/c/Users/REPLACE_WITH_USERNAME/AppData/Local/Programs/Antigravity IDE/bin/antigravity-ide"],
+      "path_style": "windows"
+    }
   }
 }
