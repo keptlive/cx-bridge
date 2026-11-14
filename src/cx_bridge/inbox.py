@@ -127,6 +127,9 @@ def enqueue_message(
     cwd=None,
     delivery="inbox",
     status="pending",
+    group=None,
+    task_file=None,
+    receipt=None,
 ):
     validate_identifier(target, "target")
     if kind not in ALLOWED_KINDS:
@@ -135,7 +138,9 @@ def enqueue_message(
     encoded = validate_body(body)
     if sender is not None:
         validate_identifier(sender, "sender")
-    if status not in ("pending", "delivered", "acked"):
+    if group is not None:
+        validate_identifier(group, "group")
+    if status not in ("pending", "delivered", "acked", "sending"):
         raise BridgeError(f"Invalid message status: {status}")
     resolved_cwd = normalize_cwd(cwd) if cwd is not None else None
     now = datetime.now(timezone.utc)
@@ -153,14 +158,38 @@ def enqueue_message(
         "delivery": delivery,
         "status": status,
         "created_at": now.isoformat(),
-        "delivered_at": now.isoformat() if status != "pending" else None,
+        "delivered_at": now.isoformat() if status in ("delivered", "acked") else None,
         "delivered_to": None,
         "acked_at": None,
     }
+    record.update({key: value for key, value in (("group", group), ("task_file", task_file),
+                                                  ("receipt", receipt)) if value is not None})
     messages_dir = inbox_dir(root) / "messages"
     with inbox_lock(root):
         atomic_write_json(messages_dir / f"{msg_id}.json", record)
     return record
+
+
+@contextmanager
+def track_delivery(root, record):
+    """Update the audit record when a live transport accepts or fails a message."""
+    delivery = {"status": "delivered"}
+    try:
+        yield delivery
+    except BaseException:
+        delivery["status"] = "failed"
+        raise
+    finally:
+        status = delivery["status"]
+        file = inbox_dir(root) / "messages" / (record["id"] + ".json")
+        with inbox_lock(root):
+            current = _read_message_file(file)
+            if current["status"] == "sending":
+                current["status"] = status
+                if status == "delivered":
+                    current["delivered_at"] = datetime.now(timezone.utc).isoformat()
+                atomic_write_json(file, current)
+            record.update(current)
 
 
 def record_session_heartbeat(root, *, target, kind, session_id, cwd=None, event=None, name=None):
@@ -313,8 +342,10 @@ def list_messages(
     claimed_by=None,
     limit=50,
     enforce_msg_cwd=False,
+    group=None,
+    threads=None,
 ):
-    messages_dir = inbox_dir(root) / "messages"
+    messages_dir = Path(root) / "inbox" / "messages"
     if not messages_dir.is_dir():
         return []
 
@@ -325,6 +356,10 @@ def list_messages(
             try:
                 msg = _read_message_file(file)
             except (OSError, ValueError, TypeError):
+                continue
+            if group and msg.get("group") != group:
+                continue
+            if threads is not None and msg["thread"] not in threads:
                 continue
             if not include_all and msg.get("status") != "pending":
                 continue

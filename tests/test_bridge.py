@@ -19,7 +19,7 @@ FAKE_FRAMEWORK = Path(__file__).with_name("fake_framework_agent.py")
 SRC_ROOT = str(Path(cli.__file__).resolve().parents[1])
 
 
-class BridgeTests(unittest.TestCase):
+class BridgeTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="bridge test ")
         self.root = Path(self.temp.name)
@@ -47,6 +47,8 @@ class BridgeTests(unittest.TestCase):
     def records(self):
         return [json.loads(p.read_text()) for p in sorted((self.root / "private jobs").glob("*/*/job.json"))]
 
+
+class BridgeTests(BridgeTestCase):
     def test_both_directions_with_spaces_unicode_and_stdin(self):
         for target in ("claude", "codex"):
             with self.subTest(target=target), patch("sys.stdin", io.StringIO("Hello café\nsecond line")):

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from . import __version__
+from .activity import board
 from .inbox import (
     BridgeError,
     ack_message,
@@ -40,6 +41,7 @@ def _tool_schemas():
                     "model": {"type": "string"},
                     "effort": {"type": "string"},
                     "name": {"type": "string"},
+                    "group": {"type": "string", "description": "Label for related activity on the board."},
                     "timeout": {"type": "number"},
                 },
                 "required": ["prompt"],
@@ -57,6 +59,7 @@ def _tool_schemas():
                     "model": {"type": "string"},
                     "effort": {"type": "string"},
                     "name": {"type": "string"},
+                    "group": {"type": "string", "description": "Label for related activity on the board."},
                     "timeout": {"type": "number"},
                 },
                 "required": ["job", "prompt"],
@@ -78,6 +81,7 @@ def _tool_schemas():
                     "model": {"type": "string"},
                     "effort": {"type": "string"},
                     "name": {"type": "string"},
+                    "group": {"type": "string", "description": "Label for related activity on the board."},
                     "timeout": {"type": "number"},
                 },
                 "required": ["job", "target", "prompt"],
@@ -95,6 +99,7 @@ def _tool_schemas():
                     "thread": {"type": "string", "description": "Target thread/session ID, 'ide', or '*' for active session."},
                     "cwd": {"type": "string", "description": "Optional workspace scope for active session matching."},
                     "sender": {"type": "string", "description": "Sender label when server --identity is not pinned."},
+                    "group": {"type": "string", "description": "Label for related activity on the board."},
                     "wake": {"type": "boolean", "description": "Wake or run a synchronous turn on the target session."},
                     "inbox_only": {"type": "boolean", "description": "Store in durable inbox without live CLI transport."},
                     "write": {"type": "boolean", "description": "Allow write/agent mode when waking or targeting IDE chat (requires --allow-write)."},
@@ -128,6 +133,20 @@ def _tool_schemas():
                 "type": "object",
                 "properties": {
                     "job": {"type": "string", "description": "Specific job ID to inspect (omit to list recent jobs)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "bridge_board",
+            "description": "Inspect bridge jobs, dispatch receipts, peer message metadata, and observed file reads.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "job": {"type": "string"},
+                    "target": {"type": "string"},
+                    "group": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
                 "additionalProperties": False,
@@ -211,6 +230,7 @@ def _execute_tool(cli_mod, config_file, allow_write, identity, name, arguments):
             base=None,
             model=arguments.get("model"),
             effort=arguments.get("effort"),
+            group=arguments.get("group"),
             name=arguments.get("name") or cmd_name,
             timeout=arguments.get("timeout"),
             json=True,
@@ -230,6 +250,7 @@ def _execute_tool(cli_mod, config_file, allow_write, identity, name, arguments):
             target=None,
             model=arguments.get("model"),
             effort=arguments.get("effort"),
+            group=arguments.get("group"),
             name=arguments.get("name") or "resume",
             timeout=arguments.get("timeout"),
             json=True,
@@ -252,6 +273,7 @@ def _execute_tool(cli_mod, config_file, allow_write, identity, name, arguments):
             message=arguments["message"],
             sender=sender,
             cwd=arguments.get("cwd"),
+            group=arguments.get("group"),
             wake=bool(arguments.get("wake", False)),
             inbox_only=bool(arguments.get("inbox_only", False)),
             write=want_write,
@@ -294,6 +316,14 @@ def _execute_tool(cli_mod, config_file, allow_write, identity, name, arguments):
             "count": len(msgs),
             "messages": [{**m, "framed": format_provenance(m)} for m in msgs],
         }
+
+    if name == "bridge_board":
+        limit = arguments.get("limit", 25)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise BridgeError("limit must be an integer between 1 and 100")
+        file = cli_mod.find_job(root, arguments["job"]) if arguments.get("job") else None
+        return False, board(root, cli_mod.read_record, job_file=file, target=arguments.get("target"),
+                            group=arguments.get("group"), limit=limit)
 
     if name == "bridge_jobs":
         if arguments.get("job"):

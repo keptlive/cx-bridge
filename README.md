@@ -135,6 +135,7 @@ hooks, and stdio MCP setups.
 | `hook claude [--to TARGET]` | Inject pending inline messages into live interactive Claude Code sessions |
 | `mcp [--allow-write] [--identity NAME]` | Serve typed `cx-bridge` tools over stdio JSON-RPC 2.0 (MCP) |
 | `threads [QUERY] [--to TARGET] [--all] [--json]` | List known sessions/threads across Codex, Claude, and Antigravity |
+| `board [--group NAME] [--job ID] [--follow]` | Inspect jobs, peer messages, dispatch receipts, and observed file reads |
 | `jobs` / `show JOB_ID` | Inspect recent jobs or structured status |
 | `result JOB_ID` / `events JOB_ID --tail 25` | Read the saved result or recent raw provider events |
 | `targets` / `workspaces` | List configured target summaries or workspace mappings |
@@ -142,6 +143,49 @@ hooks, and stdio MCP setups.
 
 Use `-` as `PROMPT` or `MESSAGE` to read stdin. `--json` emits structured JSON
 on stdout while keeping diagnostics on stderr.
+
+## Activity board
+
+Run the board in a separate terminal while workers are running. Use the same
+bridge config as the workers so the board reads their job and inbox records.
+
+```sh
+cx-bridge board --follow
+cx-bridge board --group terra-pilot --follow --show-tasks --show-messages
+cx-bridge board --job JOB_ID --json
+```
+
+Pass `--group terra-pilot` to related `run`, `say`, and `dispatch` calls.
+`resume` and `handoff` inherit the original job's group unless overridden.
+Use `-n` to give a job a readable assignment name. The board prioritizes
+running jobs, shows model and session when known, and displays live Codex
+checklists and supported tool activity when present. Dispatch messages show
+the job file and whether a receipt appeared. Use `--show-tasks` for a short
+preview of each job brief. Message bodies are opt-in with
+`--show-messages`. The board never claims or acknowledges an inbox message.
+With `--json --follow`, each changed snapshot is a separate JSON line.
+The read-only MCP tool `bridge_board` exposes the same snapshots without
+message bodies or task briefs.
+
+The snapshot has two arrays, `tasks` and `messages`. A task includes its
+job ID, optional group, target, model, session, status, `plan`, `active_tools`,
+and `files_read`. Each read has `path`, `tool`, and `evidence`
+(`provider_reported` or `inferred_from_command`). The `event_log` field
+indicates whether the log was available, partial, missing, or too large.
+A message includes its ID, sender, target, thread, delivery method, status,
+and timestamps. Dispatches also include their task and receipt paths and
+`receipt_ready`. A delivered live message was accepted by its transport.
+A delivered inbox message was claimed. An acknowledged message has status
+`acked`. IDs are stable across snapshots.
+
+File reads are derived from existing job event logs. Claude Code `Read`,
+Antigravity `view_file`, and ACP read calls with file locations are shown
+when the provider reports a successful completion. For Codex, the board
+labels simple successful commands such as `cat README.md` and
+`Get-Content -LiteralPath 'README.md' -Raw` as inferred reads. Generic JSONL
+connectors can emit `{"event":"file_read","status":"completed","path":"README.md"}`.
+The board shows paths only. Reads inside scripts, pipelines, searches, or IDE
+sessions whose events are outside the bridge logs may be absent.
 
 ## Inline messaging across all three agents
 
