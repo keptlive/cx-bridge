@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="cx-panel" content="__PANEL_TOKEN__">
+  <title>CX Bridge Control Panel</title>
+  <link rel="stylesheet" href="/panel.css">
+  <script defer src="/panel.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wordmark"><span aria-hidden="true" class="mark">CX</span> <strong>CX Bridge</strong></div>
+    <nav aria-label="Control panel">
+      <button type="button" data-view="activity" aria-current="page">Activity</button>
+      <button type="button" data-view="connectors">Connectors</button>
+    </nav>
+    <span class="local">Local control panel</span>
+  </header>
+  <main>
+    <section id="activity" aria-labelledby="activity-title">
+      <div class="page-head">
+        <div><h1 id="activity-title">Activity</h1><p class="muted">Jobs, peer messages, and file reads across your agents.</p></div>
+        <button type="button" class="button" id="refresh-activity">Refresh activity</button>
+      </div>
+      <div class="toolbar">
+        <label>Target <select id="activity-target"><option value="">All targets</option></select></label>
+        <label>Group <input id="activity-group" type="search" placeholder="All groups" maxlength="64"></label>
+        <label class="check"><input id="show-tasks" type="checkbox"> Show task briefs</label>
+        <label class="check"><input id="show-messages" type="checkbox"> Show message bodies</label>
+        <label class="check"><input id="follow" type="checkbox" checked> Live refresh</label>
+      </div>
+      <p id="activity-status" class="notice" role="status"></p>
+      <div class="metrics" aria-label="Visible activity">
+        <div><span>Running jobs</span><strong id="running-count">0</strong></div>
+        <div><span>Recent jobs</span><strong id="recent-count">0</strong></div>
+        <div><span>Peer messages</span><strong id="message-count">0</strong></div>
+      </div>
+      <div class="columns">
+        <section class="card" aria-labelledby="jobs-title">
+          <div class="card-head"><h2 id="jobs-title">Jobs</h2><button class="button small" id="clear-job" type="button" hidden>Show all jobs</button></div>
+          <div id="jobs"></div>
+        </section>
+        <section class="card" aria-labelledby="messages-title">
+          <div class="card-head"><h2 id="messages-title">Peer messages</h2></div>
+          <div id="messages"></div>
+        </section>
+      </div>
+    </section>
+    <section id="connectors" aria-labelledby="connectors-title" hidden>
+      <div class="page-head">
+        <div><h1 id="connectors-title">Connectors</h1><p class="muted">Find the services you already use and set up access for shared agents.</p></div>
+        <button type="button" class="button primary" id="scan">Scan connectors</button>
+      </div>
+      <div class="toolbar">
+        <label>Workspace <select id="workspace"><option value="">Panel workspace</option></select></label>
+        <span id="workspace-path" class="muted path"></span>
+      </div>
+      <div class="connector-columns">
+        <section class="card" aria-labelledby="connections-title">
+          <div class="card-head"><h2 id="connections-title">Connector setup</h2><span class="muted" id="connection-count"></span></div>
+          <p id="connector-status" class="notice padded" role="status"></p>
+          <div id="connection-profiles"></div>
+        </section>
+        <section class="card" aria-labelledby="import-title">
+          <div class="card-head"><h2 id="import-title">Install a shared agent</h2></div>
+          <div class="import-content">
+            <label>Shared agent file <input id="agent-file" type="file" accept=".json,application/json"></label>
+            <div id="agent-preview" hidden></div>
+            <label>Install into <select id="destination"><option value="">Select a client</option></select></label>
+            <button type="button" class="button primary" id="install" disabled>Install agent</button>
+            <p id="install-status" class="notice" role="status"></p>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

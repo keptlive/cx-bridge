@@ -144,6 +144,42 @@ hooks, and stdio MCP setups.
 Use `-` as `PROMPT` or `MESSAGE` to read stdin. `--json` emits structured JSON
 on stdout while keeping diagnostics on stderr.
 
+## Local control panel
+
+Run `cx-bridge panel -C /path/to/project` and open the loopback URL it prints.
+Use the same CX Bridge config as your workers. The **Activity** tab follows jobs,
+plans, current tools, observed file reads, peer messages, and dispatch status.
+Turn on task briefs or message bodies when you need to see their contents.
+
+**Connectors** checks the configured Codex and Claude Code profiles in the
+selected workspace. Existing connections appear as ready. For missing access,
+the panel shows the command or in-client step and where to use it. Run that
+step in the corresponding profile and scan again. CX Bridge uses each client's
+existing authentication and keeps Claude-hosted connections in Claude.
+
+To install a shared agent, choose a JSON file like this one, select a client,
+and click **Install agent** once its connections are ready. The panel shows the
+agent's instructions for review and rechecks its connections before writing a
+native project agent file. Start a new client session in that workspace to
+use it. An existing agent with the same name is preserved.
+
+```json
+{
+  "version": 1,
+  "name": "docs-reader",
+  "description": "Find relevant OpenAI documentation.",
+  "instructions": "Use the connected documentation service and cite the relevant pages.",
+  "connectors": ["openai-docs"]
+}
+```
+
+Built-in setup guides cover GitHub, Linear, and OpenAI Docs. The panel also
+recognizes existing Gmail, Google Calendar, and Google Drive connections and
+shows other discovered connectors by name. Connector IDs in shared files
+contain lowercase letters, numbers, and hyphens. CX Bridge does not copy
+credentials, install connector executables from shared files, or override
+client and workspace access policies.
+
 ## Activity board
 
 Run the board in a separate terminal while workers are running. Use the same

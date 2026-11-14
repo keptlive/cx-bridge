@@ -16,3 +16,6 @@ cx-bridge = "cx_bridge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+cx_bridge = ["panel_assets/*"]

@@ -1538,6 +1538,9 @@ def parser():
             cmd.add_argument("prompt", nargs="?", default="")
         else:
             cmd.add_argument("prompt")
+    panel = sub.add_parser("panel", help="Open the local CX Bridge control panel")
+    panel.add_argument("-C", "--cwd", help="Default workspace for connector setup and shared agents")
+    panel.add_argument("--port", type=int, default=0, help="Local port (defaults to an available port)")
     board = sub.add_parser("board", help="See jobs, peer messages, and observed file reads")
     board.add_argument("--job", help="Show one job and messages explicitly addressed to it")
     board.add_argument("--to", dest="target", help="Filter by destination target")
@@ -1650,6 +1653,11 @@ def main(argv=None):
             return run_job(args, cfg)
         if args.command == "doctor":
             return doctor(cfg, args.timeout)
+        if args.command == "panel":
+            from .panel import run_panel
+            if not 0 <= args.port <= 65535:
+                raise BridgeError("Panel port must be between 0 and 65535")
+            return run_panel(sys.modules[__name__], cfg, args)
         if args.command == "board":
             return run_board(args, jobs_root(cfg), read_record, find_job)
         if args.command == "jobs":
